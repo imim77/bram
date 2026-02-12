@@ -1,41 +1,83 @@
-
-
-
-class ClientConnection{
-    constructor(){ 
+class ClientConnection {
+    socket = null;
+    constructor() {
         this.connect();
     }
-
-    connect(){
-        const ws = new WebSocket(`ws://${window.location.host}/websocket`) 
-        ws.onopen = ()=> console.log("Websocket server connected!")
-        ws.onclose = () => console.log("Websocket server closed!")
-        ws.onmessage = (e) => this.onMessage(e.data)
+    connect() {
+        const ws = new WebSocket(`ws://${window.location.host}/websocket`);
+        ws.onopen = () => console.log("Websocket server connected");
+        ws.onclose = () => console.log("Websocket server closed!");
+        ws.onerror = (error) => console.error("Websocket error: ", error);
         this.socket = ws;
     }
-
-
-    onMessage(msg){
-        msg = JSON.parse(msg);
-        console.log("WS message: ", msg)
-        switch(msg.type){
-            default:
-                console.log("WS: unknown message type", msg)
-        }
-    }
-
-    send(message){
-        if(!this._isConnected) return;
+    send(message) {
+        if (!this.isConnected)
+            return;
         this.socket.send(JSON.stringify(message));
     }
-
-    _isConnected(){
-        return this.socket && this.socket.readyState === this.socket.OPEN;
+    onMessage(msg) {
+        const parsedMsg = JSON.parse(msg);
+        console.log("WS message: ", parsedMsg);
+        switch (parsedMsg.type) {
+            default:
+                console.log("WS unknown message type: ", parsedMsg);
+        }
     }
-
-    _isConnecting(){
-        return this.socket && this.socket.readyState === this.socket.CONNECTING;
+    get isConnecting() {
+        return this.socket !== null && this.socket.readyState == WebSocket.CONNECTING;
+    }
+    get isConnected() {
+        return this.socket !== null && this.socket.readyState == WebSocket.OPEN;
     }
 }
-
-const ws = new ClientConnection();
+class FileChunker {
+    chunkSize = 64000;
+    maxPartitionSize = 1e6;
+    offset = 0;
+    partitionSize = 0;
+    reader;
+    file;
+    onChunk;
+    onPartitionEnd;
+    constructor(file, onChunk, onPartitionEnd) {
+        this.file = file;
+        this.onChunk = onChunk;
+        this.onPartitionEnd = onPartitionEnd;
+        this.reader = new FileReader;
+    }
+    readChunk() {
+        const end = Math.min(this.offset + this.chunkSize, this.file.size);
+        const chunk = this.file.slice(this.offset, end);
+        this.reader.readAsArrayBuffer(chunk);
+    }
+    onChunkRead(chunk) {
+        this.offset += chunk.byteLength;
+        this.partitionSize += chunk.byteLength;
+        this.onChunk(chunk);
+        if (this.isFileEnd())
+            return;
+        if (this.partitionSize >= this.maxPartitionSize) {
+            this.onPartitionEnd(this.offset);
+            return;
+        }
+        this.readChunk();
+    }
+    nextPartition() {
+        this.partitionSize = 0;
+        this.readChunk();
+    }
+    repeatPartition() {
+        this.offset -= this.partitionSize;
+        this.nextPartition();
+    }
+    isPartitionEnd() {
+        return this.partitionSize >= this.maxPartitionSize;
+    }
+    isFileEnd() {
+        return this.offset >= this.file.size;
+    }
+    get progress() {
+        return this.file.size > 0 ? this.offset / this.file.size : 0;
+    }
+}
+export {};
