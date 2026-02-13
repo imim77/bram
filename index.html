@@ -5,6 +5,7 @@
 
         <title>bram</title>
 
+
     </head>
     <body>
         <div>
@@ -12,6 +13,37 @@
             <h2>Peers</h2>
             <div></div>
         </div>
+        <div class="section">
+      <h3>Messages</h3>
+      <div id="logs"></div> 
+      </div>
+    </div>
     </body>
+    <style>
+          /* --- Chat / Messages --- */
+      .chat-row {
+        display: flex;
+        gap: 8px;
+        margin-top: 12px;
+      }
+    
+
+      /* --- Logs --- */
+      #logs {
+        max-height: 160px;
+        overflow-y: auto;
+        font-family: "SF Mono", "Fira Code", monospace;
+        font-size: 0.8rem;
+        color: #8b949e;
+        padding: 10px;
+        background: #0d1117;
+        border-radius: 8px;
+        border: 1px solid #21262d;
+      }
+      #logs div {
+        padding: 2px 0;
+        border-bottom: 1px solid #161b22;
+      }
+    </style>
     <script type="module" src="./client/scripts/index.js"></script>
 </html>

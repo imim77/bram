@@ -1,0 +1,5 @@
+# Go build output
+bin/
+
+# Compiled TypeScript (generated from .ts files)
+client/scripts/*.js

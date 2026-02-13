@@ -1,33 +1,96 @@
 class ClientConnection {
     socket = null;
-    constructor() {
+    callbacks;
+    constructor(callbacks) {
+        this.callbacks = callbacks;
         this.connect();
     }
     connect() {
         const ws = new WebSocket(`ws://${window.location.host}/websocket`);
-        ws.onopen = () => console.log("Websocket server connected");
-        ws.onclose = () => console.log("Websocket server closed!");
+        ws.onopen = () => addLog("Websocket connected");
+        ws.onclose = () => addLog("Websocket closed");
         ws.onerror = (error) => console.error("Websocket error: ", error);
+        ws.onmessage = (e) => this.onMessage(e.data);
         this.socket = ws;
+    }
+    close() {
+        this.socket?.close();
+    }
+    sendOffer(peerID, sdp) {
+        this.send({ event: 'offer', to: peerID, data: JSON.stringify(sdp) });
+    }
+    sendAnswer(peerID, sdp) {
+        this.send({ event: 'answer', to: peerID, data: JSON.stringify(sdp) });
+    }
+    sendCandidate(peerID, candidate) {
+        this.send({ event: 'candidate', to: peerID, data: JSON.stringify(candidate) });
+    }
+    get isConnecting() {
+        return this.socket !== null && this.socket.readyState === WebSocket.CONNECTING;
+    }
+    get isConnected() {
+        return this.socket !== null && this.socket.readyState === WebSocket.OPEN;
     }
     send(message) {
         if (!this.isConnected)
             return;
         this.socket.send(JSON.stringify(message));
     }
-    onMessage(msg) {
-        const parsedMsg = JSON.parse(msg);
-        console.log("WS message: ", parsedMsg);
-        switch (parsedMsg.type) {
-            default:
-                console.log("WS unknown message type: ", parsedMsg);
+    onMessage(raw) {
+        const msg = JSON.parse(raw);
+        switch (msg.event) {
+            case 'welcome':
+                this.callbacks.onWelcome(msg.data);
+                break;
+            case 'peers':
+                this.callbacks.onPeers(JSON.parse(msg.data));
+                break;
+            case 'offer':
+                this.callbacks.onOffer(msg.from, JSON.parse(msg.data));
+                break;
+            case 'answer':
+                this.callbacks.onAnswer(msg.from, JSON.parse(msg.data));
+                break;
+            case 'candidate':
+                this.callbacks.onCandidate(msg.from, JSON.parse(msg.data));
+                break;
         }
     }
-    get isConnecting() {
-        return this.socket !== null && this.socket.readyState == WebSocket.CONNECTING;
+}
+class Peer {
+    conn = null;
+    channel = null;
+    iceState = 'new';
+    pendingCandidates = [];
+    isCaller;
+    constructor(serverConnection, peerID, isCaller) {
+        this.isCaller = isCaller;
     }
-    get isConnected() {
-        return this.socket !== null && this.socket.readyState == WebSocket.OPEN;
+    openConnection(peerID) {
+        const host = window.location.hostname;
+        this.conn = new RTCPeerConnection({
+            iceServers: [
+                { urls: `stun:${host}:3478` },
+                { urls: `turn:${host}:3478`, username: 'peer', credential: 'peer' }
+            ]
+        });
+        this.conn.onconnectionstatechange = () => {
+            if (this.conn)
+                console.log("Connection state change: ", this.conn.connectionState);
+        };
+    }
+    openChannel() {
+    }
+    send(data) {
+        if (this.channel && this.channel.readyState === 'open')
+            this.channel.send(data);
+    }
+    isConnected() {
+        return this.channel !== null && this.channel.readyState === 'open';
+    }
+    close() {
+        if (this.conn)
+            this.conn.close();
     }
 }
 class FileChunker {
@@ -44,6 +107,11 @@ class FileChunker {
         this.onChunk = onChunk;
         this.onPartitionEnd = onPartitionEnd;
         this.reader = new FileReader;
+        this.reader.addEventListener("load", (e) => {
+            if (e.target?.result instanceof ArrayBuffer) {
+                this.onChunkRead(e.target.result);
+            }
+        });
     }
     readChunk() {
         const end = Math.min(this.offset + this.chunkSize, this.file.size);
@@ -79,5 +147,32 @@ class FileChunker {
     get progress() {
         return this.file.size > 0 ? this.offset / this.file.size : 0;
     }
+}
+class FileDigester {
+}
+const client = new ClientConnection({
+    onWelcome: (peerID) => {
+        addLog(`Welcome! You are ${peerID}`);
+    },
+    onPeers: (peers) => {
+        addLog(`Peer list updated: ${peers.length} peer(s)`);
+    },
+    onOffer: (fromID, offer) => {
+        addLog(`Offer from ${fromID}`);
+    },
+    onAnswer: (fromID, answer) => {
+        addLog(`Answer from ${fromID}`);
+    },
+    onCandidate: (fromID, candidate) => {
+        addLog(`ICE candidate from ${fromID}`);
+    },
+});
+function addLog(text) {
+    const logs = document.getElementById('logs');
+    const entry = document.createElement('div');
+    const time = new Date().toLocaleTimeString();
+    entry.textContent = `[${time}] ${text}`;
+    logs.appendChild(entry);
+    logs.scrollTop = logs.scrollHeight;
 }
 export {};

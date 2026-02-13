@@ -1,4 +1,7 @@
 build:
+	tsc
 	go build -o bin/bram ./server
-run:
+run: build
 	./bin/bram
+watch-ts:
+	tsc --watch
