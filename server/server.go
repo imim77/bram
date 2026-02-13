@@ -1,9 +1,11 @@
 package main
 
 import (
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/pion/turn/v4"
 )
 
 type Config struct {
@@ -81,16 +84,15 @@ func webSocketHandler(w http.ResponseWriter, r *http.Request) {
 
 	c := &threadSafeWriter{Conn: conn}
 	defer c.Close()
-	clientID := fmt.Sprintf("peer-%d", nextID.Add(1))
-	log.Printf("New client: %s", clientID)
-
-	log.Printf("WebSocket client connected: %s", r.RemoteAddr)
 
 	cli := &Client{
 		Id:          uuid.New(),
 		Connection:  conn,
 		connectedAt: time.Now().UTC(),
 	}
+
+	clientID := cli.Id.String()
+	log.Printf("New client: %s (%s)", clientID, r.RemoteAddr)
 
 	if err := c.WriteJSON(&SignalingMessage{Event: "welcome", Data: clientID}); err != nil {
 		log.Printf("Failed to send welcome to %s: %v", clientID, err)
@@ -173,4 +175,48 @@ func broadCastPeerList() {
 			log.Printf("Failed to send peer list to %s: %v", c.Id, err)
 		}
 	}
+}
+
+func turnAuthKey(username, realm, password string) []byte {
+	h := md5.New()
+	h.Write([]byte(username + ":" + realm + ":" + password))
+	return h.Sum(nil)
+}
+
+const (
+	turnPort     = 3478
+	turnRealm    = "localhost"
+	turnUser     = "peer"
+	turnPassword = "peer"
+)
+
+func startTURN() {
+	udpListener, err := net.ListenPacket("udp4", fmt.Sprintf("0.0.0.0:%d", turnPort))
+	if err != nil {
+		log.Fatalf("Failed to listen UDP for TURN: %v", err)
+	}
+
+	_, err = turn.NewServer(turn.ServerConfig{
+		Realm: turnRealm,
+		AuthHandler: func(username string, realm string, srcAddr net.Addr) ([]byte, bool) {
+			if username == turnUser {
+				return turnAuthKey(turnUser, turnRealm, turnPassword), true
+			}
+			return nil, false
+		},
+		PacketConnConfigs: []turn.PacketConnConfig{
+			{
+				PacketConn: udpListener,
+				RelayAddressGenerator: &turn.RelayAddressGeneratorStatic{
+					RelayAddress: net.ParseIP("127.0.0.1"),
+					Address:      "0.0.0.0",
+				},
+			},
+		},
+	})
+	if err != nil {
+		log.Fatalf("Failed to start TURN server: %v", err)
+	}
+
+	log.Printf("TURN server listening on UDP :%d (user=%s, pass=%s)", turnPort, turnUser, turnPassword)
 }

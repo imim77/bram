@@ -33,6 +33,10 @@ func run(ctx context.Context, stdout, stderr io.Writer, args []string) error {
 	fmt.Fprintf(stdout, "TURN server running on UDP :%d\n", cfg.TURNPort)
 
 	go func() {
+		startTURN()
+	}()
+
+	go func() {
 		log.Printf("Listening on %s\n", httpServer.Addr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			fmt.Fprintf(stderr, "error listening and serving: %s\n", err)

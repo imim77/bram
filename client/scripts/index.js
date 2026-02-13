@@ -265,20 +265,28 @@ class FileDigester {
 // --- App state ---
 let myPeerID = '';
 const peers = new Map();
+const div = document.getElementById("peers-div");
 const client = new ClientConnection({
     onWelcome: (peerID) => {
         myPeerID = peerID;
         addLog(`Welcome! You are ${peerID}`);
+        const entry1 = document.createElement('div');
+        entry1.textContent = `[PeerID] ${peerID}`;
+        div?.append(entry1);
     },
     onPeers: (serverPeers) => {
         addLog(`Peer list updated: ${serverPeers.length} peer(s)`);
         for (const sp of serverPeers) {
             // Skip ourselves and already-known peers
+            const divara = document.createElement('div');
+            divara.textContent = `[PEER] ${sp.id}`;
+            div?.appendChild(divara);
             if (sp.id === myPeerID || peers.has(sp.id))
                 continue;
-            // We are the caller for any new peer we discover
-            addLog(`Connecting to new peer ${sp.id}...`);
-            const peer = new Peer(client, sp.id, true);
+            // Only the peer with the smaller ID initiates (prevents both sides sending offers)
+            const isCaller = myPeerID < sp.id;
+            addLog(`New peer ${sp.id} (${isCaller ? 'calling' : 'waiting for offer'})`);
+            const peer = new Peer(client, sp.id, isCaller);
             peers.set(sp.id, peer);
         }
     },

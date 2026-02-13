@@ -372,17 +372,50 @@ type DigestCallback = (file : DigestedFile) => void;
 
 
 class FileDigester{
-    //constructor(meta : FileMeta, callback : DigestCallback)
+    buffer : (ArrayBuffer | Blob)[] = [];
+    bytesRecieved : number = 0;
+    size : number;
+    mime : string;
+    name : string;
+    callback : DigestCallback
+    progress : number = 0;
+
+    constructor(meta : FileMeta, callback : DigestCallback){
+        this.size = meta.size;
+        this.mime = meta.mime || 'application/octet-stream';
+        this.name = meta.name;
+        this.callback = callback;
+    }
+
+    unchunk(chunk : ArrayBuffer){
+        this.buffer.push(chunk);
+        this.bytesRecieved += chunk.byteLength;
+        this.progress = this.size > 0 ? this.bytesRecieved/this.size : 1
+        if(this.bytesRecieved < this.size) return;
+        const blob = new Blob(this.buffer, {type: this.mime});
+        this.callback({
+            name: this.name,
+            mime: this.mime,
+            size: this.size,
+            blob: blob,
+        })
+    }
+    
 }
 
 // --- App state ---
 let myPeerID = '';
 const peers = new Map<string, Peer>();
 
+const div = document.getElementById("peers-div"); 
 const client = new ClientConnection({
     onWelcome: (peerID) => {
         myPeerID = peerID;
         addLog(`Welcome! You are ${peerID}`);
+        const entry1 = document.createElement('div');
+        entry1.textContent = `[PeerID] ${peerID}`
+        div?.append(entry1)
+        
     },
 
     onPeers: (serverPeers) => {
@@ -390,11 +423,15 @@ const client = new ClientConnection({
 
         for (const sp of serverPeers) {
             // Skip ourselves and already-known peers
+            const divara = document.createElement('div');
+            divara.textContent = `[PEER] ${sp.id}`
+            div?.appendChild(divara);
             if (sp.id === myPeerID || peers.has(sp.id)) continue;
 
-            // We are the caller for any new peer we discover
-            addLog(`Connecting to new peer ${sp.id}...`);
-            const peer = new Peer(client, sp.id, true);
+            // Only the peer with the smaller ID initiates (prevents both sides sending offers)
+            const isCaller = myPeerID < sp.id;
+            addLog(`New peer ${sp.id} (${isCaller ? 'calling' : 'waiting for offer'})`);
+            const peer = new Peer(client, sp.id, isCaller);
             peers.set(sp.id, peer);
         }
     },
