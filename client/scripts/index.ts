@@ -6,7 +6,7 @@ interface SignalingMessage {
 }
 
 interface ServerPeer {
-    peerID: string;
+    id: string;
     connectedAt: string;
 }
 
@@ -44,7 +44,7 @@ class ClientConnection {
         this.send({ event: 'offer', to: peerID, data: JSON.stringify(sdp) });
     }
 
-    public sendAnswer(peerID: string, sdp: RTCSessionDescriptionInit) {
+    public sendAnswer(peerID: string, sdp: RTCSessionDescriptionInit | null) {
         this.send({ event: 'answer', to: peerID, data: JSON.stringify(sdp) });
     }
 
@@ -108,16 +108,33 @@ class Peer extends PeerFiles{
     constructor(serverConnection : ClientConnection, peerID : string, isCaller : boolean){
         super(serverConnection, peerID)
         this.isCaller = isCaller;
+        this.connect(this.peerID, this.isCaller);
 
     }
+
+
+    connect(peerID : string, isCaller : boolean){
+        this.openConnection(this.peerID);
+        if(isCaller){
+            this.openChannel();
+        }else{
+            if(this.conn){
+                this.conn.ondatachannel = (e) => this.onChannelOpened(e);
+            }
+        }
+    }
+
+
     openConnection(peerID : string){
-        const host = window.location.hostname
+        const host = window.location.hostname;
         this.conn = new RTCPeerConnection({
             iceServers:[
                 { urls: `stun:${host}:3478` },
                 { urls: `turn:${host}:3478`, username: 'peer', credential: 'peer' }
             ]
         })
+
+        this.conn.onicecandidate = (e : RTCPeerConnectionIceEvent) => this.onICECandidate(e);
 
         this.conn.onicegatheringstatechange = () => {
             if(this.conn) addLog(`ICE gathering: ${this.conn.iceGatheringState}`)
@@ -150,12 +167,86 @@ class Peer extends PeerFiles{
         })
     }
 
+
+    onICECandidate(event : RTCPeerConnectionIceEvent){
+        if(!event.candidate){
+            addLog(`[${this.peerID}] ICE gathering complete`);
+            return;
+        }
+        const c = event.candidate;
+        addLog(
+        `[${this.peerID}] ICE candidate: ${c.type || 'unknown'} ${
+            c.address || c.candidate.split(' ')[4] || '?'
+        } ${c.protocol || ''}`
+        );
+        this.server.sendCandidate(this.peerID, event.candidate)
+    }
+
+
     onChannelOpened(event : Event | RTCDataChannelEvent){
         const channel = 'channel' in event ? event.channel : (event.target as RTCDataChannel);
-        channel.binaryType = 'arraybuffer';
-        //channel.onmessage = (e : MessageEvent) => ??
-        
+        channel.binaryType = 'arraybuffer'; 
+        addLog(`Data channel with ${this.peerID} opened`);
+        //channel.onmessage = (e : MessageEvent) => 
+        channel.onclose = ()=> this.onChannelClosed();
+        this.channel = channel;
+
     }
+
+    onChannelClosed(){
+        addLog(`DataChannel with ${this.peerID} closed`);
+    }
+
+
+    handleRemoteOffer(offer : RTCSessionDescriptionInit){
+        if(!this.conn) return;
+
+        this.conn.setRemoteDescription(offer).then(() => {
+            this.flushPendingCandidates();
+            if(this.conn){
+                return this.conn.createAnswer();
+            }
+        }).then((answer) => {
+            if(this.conn && answer){
+                return this.conn.setLocalDescription(answer);
+            }
+        }).then(() => {
+            if(this.conn){
+                this.server.sendAnswer(this.peerID, this.conn.localDescription);
+                addLog(`Sent answer to ${this.peerID}`);
+            }
+        }).catch((error) => {
+            console.error(`Failed to handle offer from ${this.peerID}:`, error);
+        });
+    }
+
+
+    handleRemoteAnswer(answer : RTCSessionDescriptionInit){
+        if(!this.conn) return;
+
+        this.conn.setRemoteDescription(answer).then(()=>{
+            this.flushPendingCandidates();
+        })
+        .catch((error)=>{console.error(`Failed to handle answer from ${this.peerID}:`, error)});
+    }
+
+    flushPendingCandidates(){
+        if(!this.conn) return;
+        for(const c of this.pendingCandidates){
+            this.conn.addIceCandidate(c).catch((error) => {console.error(`Failed to add pending ICE candidate:`, error);})
+        }
+        this.pendingCandidates = [];
+    }
+
+    handleRemoteCandidate(candidate : RTCIceCandidate){
+        if(!this.conn) return;
+        if(this.conn.remoteDescription){
+            this.conn.addIceCandidate(candidate).catch((error) => {console.error(`Failed to add ICE candidate from ${this.peerID}:`, error);});
+        }else{
+            this.pendingCandidates.push(candidate)
+        }
+    }
+
 
     send(data : ArrayBuffer){
         if(this.channel && this.channel.readyState === 'open') this.channel.send(data);
@@ -284,21 +375,58 @@ class FileDigester{
     //constructor(meta : FileMeta, callback : DigestCallback)
 }
 
+// --- App state ---
+let myPeerID = '';
+const peers = new Map<string, Peer>();
+
 const client = new ClientConnection({
     onWelcome: (peerID) => {
+        myPeerID = peerID;
         addLog(`Welcome! You are ${peerID}`);
     },
-    onPeers: (peers) => {
-        addLog(`Peer list updated: ${peers.length} peer(s)`);
+
+    onPeers: (serverPeers) => {
+        addLog(`Peer list updated: ${serverPeers.length} peer(s)`);
+
+        for (const sp of serverPeers) {
+            // Skip ourselves and already-known peers
+            if (sp.id === myPeerID || peers.has(sp.id)) continue;
+
+            // We are the caller for any new peer we discover
+            addLog(`Connecting to new peer ${sp.id}...`);
+            const peer = new Peer(client, sp.id, true);
+            peers.set(sp.id, peer);
+        }
     },
+
     onOffer: (fromID, offer) => {
         addLog(`Offer from ${fromID}`);
+        let peer = peers.get(fromID);
+        if (!peer) {
+            peer = new Peer(client, fromID, false);
+            peers.set(fromID, peer);
+        }
+        peer.handleRemoteOffer(offer);
     },
+
     onAnswer: (fromID, answer) => {
         addLog(`Answer from ${fromID}`);
+        const peer = peers.get(fromID);
+        if (peer) {
+            peer.handleRemoteAnswer(answer);
+        } else {
+            addLog(`No peer found for answer from ${fromID}`);
+        }
     },
+
     onCandidate: (fromID, candidate) => {
         addLog(`ICE candidate from ${fromID}`);
+        const peer = peers.get(fromID);
+        if (peer) {
+            peer.handleRemoteCandidate(candidate);
+        } else {
+            addLog(`No peer found for candidate from ${fromID}`);
+        }
     },
 });
 
